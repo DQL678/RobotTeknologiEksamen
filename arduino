@@ -1,0 +1,149 @@
+#include <Servo.h>
+#include <LiquidCrystal.h>
+
+// --- LCD ---
+LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
+
+// --- ULTRALYD ---
+const int trigPin = 52;
+const int echoPin = 53;
+
+// --- LEDS ---
+const int redLED = 23;
+const int greenLED = 22;
+
+// --- BUTTON ---
+const int btnToggle = 24;
+
+long duration;
+int distance;
+Servo myServo;
+
+int servoPos = 90;
+int direction = 1;
+int lastBtnState = 0;
+
+// --- FILTER SETTINGS ---
+const int FILTER_SIZE = 7;
+int filterBuffer[FILTER_SIZE];
+int filterIndex = 0;
+bool bufferFilled = false;
+
+void setup() {
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  pinMode(redLED, OUTPUT);
+  pinMode(greenLED, OUTPUT);
+
+  pinMode(btnToggle, INPUT);
+
+  Serial.begin(9600);
+  myServo.attach(50);
+
+  lcd.begin(16, 2);
+  lcd.clear();
+
+  for (int i = 0; i < FILTER_SIZE; i++) {
+    filterBuffer[i] = 0;
+  }
+}
+
+void loop() {
+
+  // --- BUTTON TOGGLE ---
+  int btnState = digitalRead(btnToggle);
+  if (btnState == HIGH && lastBtnState == LOW) {
+    direction = -direction;
+  }
+  lastBtnState = btnState;
+
+
+  // --- SERVO BEVÆGELSE ---
+  servoPos += direction;
+
+  if (servoPos >= 165) direction = -1;
+  if (servoPos <= 15) direction = 1;
+
+  myServo.write(servoPos);
+  delay(20);
+
+  // --- DISTANCE ---
+  int filtered = calculateFilteredDistance();
+
+  // --- LED LOGIK ---
+  updateLEDs(filtered);
+
+  // --- LCD TEKST ---
+  lcd.setCursor(0, 0);
+  lcd.clear();
+
+  if (filtered < 40) {
+    lcd.print("Object detected");
+    lcd.setCursor(0, 1);
+    lcd.print("Distance: ");
+    lcd.print(filtered);
+    lcd.print(" cm");
+  } else {
+    lcd.print("Area is empty");
+    lcd.setCursor(0, 1);
+    lcd.print("Nothing detected");
+  }
+
+  // --- SERIAL DEBUG ---
+  Serial.print(servoPos);
+  Serial.print(",");
+  Serial.print(filtered);
+  Serial.print(".");
+}
+
+// --- ULTRALYD ---
+int calculateDistance() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  duration = pulseIn(echoPin, HIGH);
+  distance = duration * 0.034 / 2;
+
+  return distance;
+}
+
+// --- SMOOTHING ---
+int calculateFilteredDistance() {
+  int raw = calculateDistance();
+
+  filterBuffer[filterIndex] = raw;
+  filterIndex++;
+
+  if (filterIndex >= FILTER_SIZE) {
+    filterIndex = 0;
+    bufferFilled = true;
+  }
+
+  long sum = 0;
+  int count = bufferFilled ? FILTER_SIZE : filterIndex;
+
+  for (int i = 0; i < count; i++) {
+    sum += filterBuffer[i];
+  }
+
+  return sum / count;
+}
+
+// --- LED LOGIK ---
+void updateLEDs(int dist) {
+  if (dist < 40) {
+    digitalWrite(redLED, HIGH);
+    digitalWrite(greenLED, LOW);
+  } else {
+    digitalWrite(redLED, LOW);
+    digitalWrite(greenLED, HIGH);
+  }
+}
+
+
+
