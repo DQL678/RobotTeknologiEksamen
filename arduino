@@ -1,34 +1,42 @@
 #include <Servo.h>
 #include <LiquidCrystal.h>
 
-// --- LCD ---
-LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
+// ---------------- LCD ----------------
+LiquidCrystal lcd(13, 12, 11, 10, 9, 8);
 
-// --- ULTRALYD ---
+// ---------------- ULTRALYD ----------------
 const int trigPin = 52;
 const int echoPin = 53;
 
-// --- LEDS ---
+// ---------------- LEDS ----------------
 const int redLED = 23;
 const int greenLED = 22;
 
-// --- BUTTON ---
+// ---------------- BUTTON ----------------
 const int btnToggle = 24;
 
 long duration;
-int distance;
 Servo myServo;
 
+// ---------------- SERVO ----------------
 int servoPos = 90;
 int direction = 1;
 int lastBtnState = 0;
 
-// --- FILTER SETTINGS ---
+// ---------------- FILTER ----------------
 const int FILTER_SIZE = 7;
 int filterBuffer[FILTER_SIZE];
 int filterIndex = 0;
 bool bufferFilled = false;
 
+// ---------------- STATE ----------------
+bool objectDetected = false;
+unsigned long lastSeenTime = 0;
+
+int lastStableDistance = 0;
+
+
+// ================= SETUP =================
 void setup() {
   pinMode(trigPin, OUTPUT);
   pinMode(echoPin, INPUT);
@@ -42,62 +50,80 @@ void setup() {
   myServo.attach(50);
 
   lcd.begin(16, 2);
-  lcd.clear();
 
   for (int i = 0; i < FILTER_SIZE; i++) {
     filterBuffer[i] = 0;
   }
 }
 
+
+// ================= LOOP =================
 void loop() {
 
-  // --- BUTTON TOGGLE ---
+  // -------- BUTTON --------
   int btnState = digitalRead(btnToggle);
   if (btnState == HIGH && lastBtnState == LOW) {
     direction = -direction;
   }
   lastBtnState = btnState;
 
-
-  // --- SERVO BEVÆGELSE ---
+  // -------- SERVO --------
   servoPos += direction;
 
   if (servoPos >= 165) direction = -1;
   if (servoPos <= 15) direction = 1;
 
   myServo.write(servoPos);
-  delay(20);
 
-  // --- DISTANCE ---
+  // -------- DISTANCE --------
   int filtered = calculateFilteredDistance();
 
-  // --- LED LOGIK ---
-  updateLEDs(filtered);
-
-  // --- LCD TEKST ---
-  lcd.setCursor(0, 0);
-  lcd.clear();
-
-  if (filtered < 40) {
-    lcd.print("Object detected");
-    lcd.setCursor(0, 1);
-    lcd.print("Distance: ");
-    lcd.print(filtered);
-    lcd.print(" cm");
-  } else {
-    lcd.print("Area is empty");
-    lcd.setCursor(0, 1);
-    lcd.print("Nothing detected");
+  // -------- DETECTION STATE --------
+  if (filtered > 0 && filtered <= 100) {
+    objectDetected = true;
+    lastSeenTime = millis();
+    lastStableDistance = filtered;
   }
 
-  // --- SERIAL DEBUG ---
+  if (millis() - lastSeenTime > 300) {
+    objectDetected = false;
+  }
+
+  // -------- LED (MATCHER LCD) --------
+  updateLEDs();
+
+  // -------- LCD --------
+  lcd.setCursor(0, 0);
+  lcd.print("                ");
+  lcd.setCursor(0, 1);
+  lcd.print("                ");
+
+  if (objectDetected) {
+    lcd.setCursor(0, 0);
+    lcd.print("Object detected");
+
+    lcd.setCursor(0, 1);
+    lcd.print("Dist:");
+    lcd.print(lastStableDistance);
+    lcd.print(" cm");
+  } else {
+    lcd.setCursor(0, 0);
+    lcd.print("Area is empty");
+
+    lcd.setCursor(0, 1);
+    lcd.print("No object");
+  }
+
+  // -------- SERIAL (PYTHON) --------
   Serial.print(servoPos);
   Serial.print(",");
-  Serial.print(filtered);
-  Serial.print(".");
+  Serial.println(filtered);
+
+  delay(15);
 }
 
-// --- ULTRALYD ---
+
+// ================= DISTANCE =================
 int calculateDistance() {
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
@@ -106,26 +132,36 @@ int calculateDistance() {
   delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
 
-  duration = pulseIn(echoPin, HIGH);
-  distance = duration * 0.034 / 2;
+  duration = pulseIn(echoPin, HIGH, 30000);
 
-  return distance;
+  if (duration == 0) return -1;
+
+  int d = duration * 0.034 / 2;
+
+  if (d < 2 || d > 100) return -1;
+
+  return d;
 }
 
-// --- SMOOTHING ---
+
+// ================= FILTER =================
 int calculateFilteredDistance() {
   int raw = calculateDistance();
 
-  filterBuffer[filterIndex] = raw;
-  filterIndex++;
+  if (raw != -1) {
+    filterBuffer[filterIndex] = raw;
+    filterIndex++;
 
-  if (filterIndex >= FILTER_SIZE) {
-    filterIndex = 0;
-    bufferFilled = true;
+    if (filterIndex >= FILTER_SIZE) {
+      filterIndex = 0;
+      bufferFilled = true;
+    }
   }
 
   long sum = 0;
   int count = bufferFilled ? FILTER_SIZE : filterIndex;
+
+  if (count == 0) return 0;
 
   for (int i = 0; i < count; i++) {
     sum += filterBuffer[i];
@@ -134,16 +170,19 @@ int calculateFilteredDistance() {
   return sum / count;
 }
 
-// --- LED LOGIK ---
-void updateLEDs(int dist) {
-  if (dist < 40) {
-    digitalWrite(redLED, HIGH);
-    digitalWrite(greenLED, LOW);
+
+// ================= LED =================
+void updateLEDs() {
+  if (objectDetected) {
+    if (lastStableDistance < 40) {
+      digitalWrite(redLED, HIGH);
+      digitalWrite(greenLED, LOW);
+    } else {
+      digitalWrite(redLED, LOW);
+      digitalWrite(greenLED, HIGH);
+    }
   } else {
     digitalWrite(redLED, LOW);
     digitalWrite(greenLED, HIGH);
   }
 }
-
-
-
