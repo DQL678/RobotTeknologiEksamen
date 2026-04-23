@@ -29,13 +29,6 @@ int filterBuffer[FILTER_SIZE];
 int filterIndex = 0;
 bool bufferFilled = false;
 
-// ---------------- STATE ----------------
-bool objectDetected = false;
-unsigned long lastSeenTime = 0;
-
-int lastStableDistance = 0;
-
-
 // ================= SETUP =================
 void setup() {
   pinMode(trigPin, OUTPUT);
@@ -43,7 +36,6 @@ void setup() {
 
   pinMode(redLED, OUTPUT);
   pinMode(greenLED, OUTPUT);
-
   pinMode(btnToggle, INPUT);
 
   Serial.begin(9600);
@@ -56,7 +48,6 @@ void setup() {
   }
 }
 
-
 // ================= LOOP =================
 void loop() {
 
@@ -67,63 +58,49 @@ void loop() {
   }
   lastBtnState = btnState;
 
-  // -------- SERVO --------
+  // -------- SERVO (0–180) --------
   servoPos += direction;
 
-  if (servoPos >= 165) direction = -1;
-  if (servoPos <= 15) direction = 1;
+  if (servoPos >= 180) direction = -1;
+  if (servoPos <= 0) direction = 1;
 
   myServo.write(servoPos);
 
   // -------- DISTANCE --------
   int filtered = calculateFilteredDistance();
 
-  // -------- DETECTION STATE --------
-  if (filtered > 0 && filtered <= 100) {
-    objectDetected = true;
-    lastSeenTime = millis();
-    lastStableDistance = filtered;
-  }
-
-  if (millis() - lastSeenTime > 300) {
-    objectDetected = false;
-  }
-
-  // -------- LED (MATCHER LCD) --------
-  updateLEDs();
+  // -------- LEDS --------
+  updateLEDs(filtered);
 
   // -------- LCD --------
   lcd.setCursor(0, 0);
   lcd.print("                ");
-  lcd.setCursor(0, 1);
-  lcd.print("                ");
+  lcd.setCursor(0, 0);
 
-  if (objectDetected) {
-    lcd.setCursor(0, 0);
+  if (filtered > 0 && filtered <= 100) {
     lcd.print("Object detected");
 
     lcd.setCursor(0, 1);
-    lcd.print("Dist:");
-    lcd.print(lastStableDistance);
-    lcd.print(" cm");
+    lcd.print("Dist: ");
+    lcd.print(filtered);
+    lcd.print(" cm   ");
   } else {
-    lcd.setCursor(0, 0);
     lcd.print("Area is empty");
 
     lcd.setCursor(0, 1);
-    lcd.print("No object");
+    lcd.print("No object       ");
   }
 
-  // -------- SERIAL (PYTHON) --------
+  // -------- SERIAL (PYTHON FORMAT) --------
   Serial.print(servoPos);
   Serial.print(",");
-  Serial.println(filtered);
+  Serial.print(filtered);
+  Serial.println(".");
 
   delay(15);
 }
 
-
-// ================= DISTANCE =================
+// ================= ULTRALYD =================
 int calculateDistance() {
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
@@ -134,21 +111,22 @@ int calculateDistance() {
 
   duration = pulseIn(echoPin, HIGH, 30000);
 
-  if (duration == 0) return -1;
+  if (duration == 0) return 0;
 
   int d = duration * 0.034 / 2;
 
-  if (d < 2 || d > 100) return -1;
+  if (d < 2 || d > 100) return 0;
 
   return d;
 }
 
-
-// ================= FILTER =================
+// ================= FILTER (FIXED) =================
 int calculateFilteredDistance() {
   int raw = calculateDistance();
 
-  if (raw != -1) {
+  bool hasValid = false;
+
+  if (raw > 0) {
     filterBuffer[filterIndex] = raw;
     filterIndex++;
 
@@ -156,12 +134,14 @@ int calculateFilteredDistance() {
       filterIndex = 0;
       bufferFilled = true;
     }
+
+    hasValid = true;
   }
 
   long sum = 0;
   int count = bufferFilled ? FILTER_SIZE : filterIndex;
 
-  if (count == 0) return 0;
+  if (count == 0 || !hasValid) return 0;
 
   for (int i = 0; i < count; i++) {
     sum += filterBuffer[i];
@@ -170,17 +150,11 @@ int calculateFilteredDistance() {
   return sum / count;
 }
 
-
-// ================= LED =================
-void updateLEDs() {
-  if (objectDetected) {
-    if (lastStableDistance < 40) {
-      digitalWrite(redLED, HIGH);
-      digitalWrite(greenLED, LOW);
-    } else {
-      digitalWrite(redLED, LOW);
-      digitalWrite(greenLED, HIGH);
-    }
+// ================= LEDS =================
+void updateLEDs(int dist) {
+  if (dist > 0 && dist <= 100) {
+    digitalWrite(redLED, HIGH);   // object detected
+    digitalWrite(greenLED, LOW);
   } else {
     digitalWrite(redLED, LOW);
     digitalWrite(greenLED, HIGH);
