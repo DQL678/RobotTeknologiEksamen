@@ -1,33 +1,45 @@
-#include <Servo.h>
-#include <LiquidCrystal.h>
+#include <Servo.h>              // Bibliotek til servostyring
+#include <LiquidCrystal.h>      // Bibliotek til LCD-display
 
 // ---------------- LCD ----------------
-LiquidCrystal lcd(13, 12, 11, 10, 9, 8);
+LiquidCrystal lcd(12, 11, 5, 4, 3, 2);   // LCD tilsluttet de angivne pins
 
 // ---------------- ULTRALYD ----------------
-const int trigPin = 52;
-const int echoPin = 53;
+const int trigPin = 52;         // Sender ultralydspulsen
+const int echoPin = 40;         // Modtager ekkoet
 
 // ---------------- LEDS ----------------
-const int redLED = 23;
-const int greenLED = 22;
+const int redLED = 26;          // Rød LED: objekt fundet
+const int greenLED = 22;        // Grøn LED: ingen objekt
 
 // ---------------- BUTTON ----------------
-const int btnToggle = 24;
+const int btnToggle = 24;       // Knap til at skifte servoens retning
 
-long duration;
-Servo myServo;
+long duration;                  // Bruges til at måle ekkotid
+Servo myServo;                  // Servo-objekt
 
 // ---------------- SERVO ----------------
-int servoPos = 90;
-int direction = 1;
-int lastBtnState = 0;
+int servoPos = 90;              // Starter i midten
+int direction = 1;              // 1 = frem, -1 = tilbage
+int lastBtnState = 0;           // Til at registrere knaptryk
+
+// Hastighedsstyring af servo
+unsigned long lastMoveTime = 0;
+const int moveInterval = 40;    // Jo større tal, jo langsommere bevægelse
 
 // ---------------- FILTER ----------------
-const int FILTER_SIZE = 7;
-int filterBuffer[FILTER_SIZE];
+const int FILTER_SIZE = 7;      // Antal målinger i gennemsnittet
+int filterBuffer[FILTER_SIZE];  // Buffer til filtrerede værdier
 int filterIndex = 0;
 bool bufferFilled = false;
+
+// ---------------- LCD CONTROL ----------------
+int lastShownDistance = -1;     // Sidst viste afstand
+bool lastDetectedState = false; // Sidste detektionsstatus
+
+unsigned long lastLCDUpdate = 0;
+const int lcdInterval = 400;    // LCD opdateres max hver 400 ms
+
 
 // ================= SETUP =================
 void setup() {
@@ -39,98 +51,120 @@ void setup() {
   pinMode(btnToggle, INPUT);
 
   Serial.begin(9600);
-  myServo.attach(50);
+  myServo.attach(50);           // Servo tilsluttes pin 50
 
-  lcd.begin(16, 2);
+  lcd.begin(16, 2);             // Starter LCD-displayet
+  lcd.clear();
 
   for (int i = 0; i < FILTER_SIZE; i++) {
-    filterBuffer[i] = 0;
+    filterBuffer[i] = 0;        // Buffer nulstilles
   }
 }
+
 
 // ================= LOOP =================
 void loop() {
 
   // -------- BUTTON --------
-  int btnState = digitalRead(btnToggle);
-  if (btnState == HIGH && lastBtnState == LOW) {
-    direction = -direction;
+  int btnState = digitalRead(btnToggle);          // Læser knappen
+  if (btnState == HIGH && lastBtnState == LOW) {  // Registrerer et enkelt tryk
+    direction = -direction;                       // Skifter servoens retning
   }
   lastBtnState = btnState;
 
-  // -------- SERVO (0–180) --------
-  servoPos += direction;
+  // -------- SERVO --------
+  if (millis() - lastMoveTime >= moveInterval) {  // Styrer servoens hastighed
+    lastMoveTime = millis();
 
-  if (servoPos >= 180) direction = -1;
-  if (servoPos <= 0) direction = 1;
+    servoPos += direction;                        // Flytter servoen 1 grad
 
-  myServo.write(servoPos);
+    if (servoPos >= 180) direction = -1;          // Vend ved 180°
+    if (servoPos <= 0)   direction = 1;           // Vend ved 0°
 
-  // -------- DISTANCE --------
-  int filtered = calculateFilteredDistance();
-
-  // -------- LEDS --------
-  updateLEDs(filtered);
-
-  // -------- LCD --------
-  lcd.setCursor(0, 0);
-  lcd.print("                ");
-  lcd.setCursor(0, 0);
-
-  if (filtered > 0 && filtered <= 100) {
-    lcd.print("Object detected");
-
-    lcd.setCursor(0, 1);
-    lcd.print("Dist: ");
-    lcd.print(filtered);
-    lcd.print(" cm   ");
-  } else {
-    lcd.print("Area is empty");
-
-    lcd.setCursor(0, 1);
-    lcd.print("No object       ");
+    myServo.write(servoPos);                      // Opdaterer servoens position
   }
 
-  // -------- SERIAL (PYTHON FORMAT) --------
-  Serial.print(servoPos);
+  // -------- DISTANCE --------
+  int filtered = calculateFilteredDistance();     // Filtreret afstand
+  bool detected = (filtered > 0 && filtered <= 100); // Objekt inden for rækkevidde?
+
+  // -------- LEDS --------
+  updateLEDs(filtered);                           // Skifter LED efter afstand
+
+  // -------- LCD --------
+  if (millis() - lastLCDUpdate > lcdInterval) {   // Opdaterer LCD med passende mellemrum,
+                                                  // så teksten ikke virker urolig at se på
+
+    // Kun opdatering hvis der er ændring
+    if (detected != lastDetectedState || abs(filtered - lastShownDistance) > 2) {
+
+      lcd.clear();
+
+      if (detected) {
+        lcd.setCursor(0, 0);
+        lcd.print("Object detected");
+
+        lcd.setCursor(0, 1);
+        lcd.print("Dist: ");
+        lcd.print(filtered);
+        lcd.print(" cm");
+      } else {
+        lcd.setCursor(0, 0);
+        lcd.print("Area is empty");
+
+        lcd.setCursor(0, 1);
+        lcd.print("No object");
+      }
+
+      lastShownDistance = filtered;
+      lastDetectedState = detected;
+    }
+
+    lastLCDUpdate = millis();
+  }
+
+  // -------- SERIAL (PYTHON) --------
+  Serial.print(servoPos);       // Sender servoens position
   Serial.print(",");
-  Serial.print(filtered);
+  Serial.print(filtered);       // Sender afstand til Python
   Serial.println(".");
 
-  delay(15);
+  delay(50);                    // Lille pause for stabilitet
 }
+
 
 // ================= ULTRALYD =================
 int calculateDistance() {
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
 
-  digitalWrite(trigPin, HIGH);
+  digitalWrite(trigPin, HIGH);  // Sender 10 µs puls
   delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
 
-  duration = pulseIn(echoPin, HIGH, 30000);
+  duration = pulseIn(echoPin, HIGH, 30000); // Måler ekkotid
 
-  if (duration == 0) return 0;
+  if (duration == 0) return 0;  // Ingen måling
 
-  int d = duration * 0.034 / 2;
+  int d = duration * 0.034 / 2; // Omregning til cm
 
-  if (d < 2 || d > 100) return 0;
+  if (d < 2 || d > 100) return 0; // Filtrerer ugyldige værdier
 
   return d;
 }
 
-// ================= FILTER (FIXED) =================
+
+// ================= FILTER =================
 int calculateFilteredDistance() {
-  int raw = calculateDistance();
+  int raw = calculateDistance(); // Rå måling
 
   bool hasValid = false;
 
   if (raw > 0) {
-    filterBuffer[filterIndex] = raw;
+    filterBuffer[filterIndex] = raw;  // Lægger måling i buffer
     filterIndex++;
 
-    if (filterIndex >= FILTER_SIZE) {
+    if (filterIndex >= FILTER_SIZE) { // Loop buffer
       filterIndex = 0;
       bufferFilled = true;
     }
@@ -141,21 +175,22 @@ int calculateFilteredDistance() {
   long sum = 0;
   int count = bufferFilled ? FILTER_SIZE : filterIndex;
 
-  if (count == 0 || !hasValid) return 0;
+  if (count == 0 || !hasValid) return 0; // Ingen gyldige målinger endnu
 
   for (int i = 0; i < count; i++) {
-    sum += filterBuffer[i];
+    sum += filterBuffer[i];             // Summerer målinger
   }
 
-  return sum / count;
+  return sum / count;                   // Gennemsnit
 }
+
 
 // ================= LEDS =================
 void updateLEDs(int dist) {
-  if (dist > 0 && dist <= 100) {
-    digitalWrite(redLED, HIGH);   // object detected
+  if (dist > 5 && dist <= 100) {        // Objekt fundet
+    digitalWrite(redLED, HIGH);
     digitalWrite(greenLED, LOW);
-  } else {
+  } else {                              // Ingen objekt
     digitalWrite(redLED, LOW);
     digitalWrite(greenLED, HIGH);
   }
